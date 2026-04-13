@@ -199,6 +199,10 @@
   .point-btn.point-active { border-color:var(--blue); background:var(--blue-bg); }
   .point-btn.point-active .point-number { background:var(--blue); color:#fff; }
   .point-btn.point-active .point-label { color:var(--blue-dark); font-weight:500; }
+  .point-btn.point-busy { opacity:0.5; cursor:not-allowed; border-color:var(--color-border-light); background:var(--color-bg); }
+  .point-btn.point-busy .point-number { background:var(--color-bg-3); color:var(--color-text-tertiary); }
+  .point-btn.point-busy .point-label { color:var(--red); font-weight:500; }
+  .point-busy-user { font-size:10px; color:var(--red); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; }
 
   /* Dropdown recherche */
   .search-select { position:relative; }
@@ -287,6 +291,8 @@ let state = {
   loginError: "",
   // Point de charge
   selectedPoint: "",         // "Point 1" ou "Point 2"
+  busyPoints: [],            // [{ point, utilisateur }]
+  busyLoading: false,
   // Charge en cours
   chargeStartTime: null,
   chargeRecordId: null,
@@ -331,6 +337,15 @@ async function getUsers() {
     nom: r.fields["Nom"] || "",
     pin: r.fields["CodePIN"] || ""
   })).filter(u => u.nom);
+}
+
+async function getBusyPoints() {
+  const formula = encodeURIComponent(`AND({DateFin}="",{Utilisateur}!="INITIAL")`);
+  const d = await api(`${TBL_CHARGES}?filterByFormula=${formula}&fields[]=PointDeCharge&fields[]=Utilisateur`);
+  return d.records.map(r => ({
+    point: r.fields["PointDeCharge"] || "",
+    utilisateur: r.fields["Utilisateur"] || ""
+  }));
 }
 
 async function createCharge(userName, point) {
@@ -611,6 +626,7 @@ function doLogin() {
   state.loginError = "";
   state.pin = "";
   state.selectedUserName = "";
+  state.busyPoints = [];
   state.screen = "home";
   render();
 }
@@ -620,6 +636,9 @@ function doLogin() {
 // ============================================================
 function renderHome() {
   const u = state.currentUser;
+  const busy1 = state.busyPoints.find(b => b.point === "Point 1");
+  const busy2 = state.busyPoints.find(b => b.point === "Point 2");
+
   el("screenHome").innerHTML = `
     <div class="welcome-screen">
       <div class="welcome-avatar">⚡</div>
@@ -629,15 +648,20 @@ function renderHome() {
       <div class="mb-4" style="text-align:left">
         <label class="field-label" style="margin-bottom:8px;text-align:center">Quel côté de la borne ?</label>
         <div class="point-row">
-          <button class="point-btn ${state.selectedPoint === "Point 1" ? "point-active" : ""}" onclick="pickPoint('Point 1')">
+          <button class="point-btn ${state.selectedPoint === "Point 1" ? "point-active" : ""} ${busy1 ? "point-busy" : ""}"
+                  ${busy1 ? "disabled" : `onclick="pickPoint('Point 1')"`}>
             <div class="point-number">1</div>
-            <div class="point-label">Gauche</div>
+            <div class="point-label">${busy1 ? "Occupé" : "Gauche"}</div>
+            ${busy1 ? `<div class="point-busy-user">🔒 ${busy1.utilisateur}</div>` : ""}
           </button>
-          <button class="point-btn ${state.selectedPoint === "Point 2" ? "point-active" : ""}" onclick="pickPoint('Point 2')">
+          <button class="point-btn ${state.selectedPoint === "Point 2" ? "point-active" : ""} ${busy2 ? "point-busy" : ""}"
+                  ${busy2 ? "disabled" : `onclick="pickPoint('Point 2')"`}>
             <div class="point-number">2</div>
-            <div class="point-label">Droite</div>
+            <div class="point-label">${busy2 ? "Occupé" : "Droite"}</div>
+            ${busy2 ? `<div class="point-busy-user">🔒 ${busy2.utilisateur}</div>` : ""}
           </button>
         </div>
+        ${state.busyLoading ? `<div style="text-align:center;font-size:12px;color:var(--color-text-tertiary);margin-top:6px">Vérification des bornes...</div>` : ""}
       </div>
 
       <button class="welcome-btn welcome-btn-primary" onclick="startCharge()" id="btnStartCharge"
@@ -660,6 +684,28 @@ function renderHome() {
       <button class="welcome-btn-logout" onclick="logout()">Se déconnecter</button>
     </div>
   `;
+
+  // Charger les points occupés en arrière-plan
+  if (!state.busyLoading && !state.busyPoints._loaded) loadBusyPoints();
+}
+
+async function loadBusyPoints() {
+  state.busyLoading = true;
+  const zone = el("screenHome");
+  // Petit texte pendant le chargement
+  try {
+    state.busyPoints = await getBusyPoints();
+    state.busyPoints._loaded = true;
+    // Si un point sélectionné est maintenant occupé, le désélectionner
+    if (state.selectedPoint && state.busyPoints.find(b => b.point === state.selectedPoint)) {
+      state.selectedPoint = "";
+    }
+  } catch (e) {
+    console.error("Erreur chargement points occupés:", e);
+    state.busyPoints = [];
+  }
+  state.busyLoading = false;
+  if (state.screen === "home") renderHome();
 }
 
 function pickPoint(p) {
@@ -677,6 +723,7 @@ function logout() {
   if (state.elapsedInterval) clearInterval(state.elapsedInterval);
   state.currentUser = null;
   state.selectedPoint = "";
+  state.busyPoints = [];
   state.screen = "login";
   render();
 }
@@ -937,6 +984,7 @@ function renderSummary() {
 function goHome() {
   state.summary = null;
   state.selectedPoint = "";
+  state.busyPoints = [];
   state.screen = "home";
   render();
 }
