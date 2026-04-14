@@ -348,6 +348,14 @@ async function getBusyPoints() {
   }));
 }
 
+async function getActiveChargeForUser(userName) {
+  const formula = encodeURIComponent(`AND({Utilisateur}="${userName}",{DateFin}="")`);
+  const d = await api(`${TBL_CHARGES}?filterByFormula=${formula}&maxRecords=1&fields[]=DateDebut&fields[]=PointDeCharge`);
+  if (!d.records.length) return null;
+  const r = d.records[0];
+  return { id: r.id, dateDebut: r.fields["DateDebut"] || null, point: r.fields["PointDeCharge"] || "" };
+}
+
 async function createCharge(userName, point) {
   return api(TBL_CHARGES, {
     method: "POST",
@@ -611,7 +619,7 @@ function updateLoginBtn() {
   if (btn) btn.disabled = !(state.selectedUserName && state.pin);
 }
 
-function doLogin() {
+async function doLogin() {
   if (!state.selectedUserName || !state.pin) return;
   const user = state.users.find(u => u.nom === state.selectedUserName);
   if (!user) { state.loginError = "Utilisateur introuvable."; render(); return; }
@@ -627,7 +635,23 @@ function doLogin() {
   state.pin = "";
   state.selectedUserName = "";
   state.busyPoints = [];
-  state.screen = "home";
+
+  // Vérifier si l'utilisateur a une charge en cours
+  el("screenLogin").innerHTML = `<div class="spinner"></div><p style="text-align:center;font-size:14px;color:var(--color-text-secondary)">Connexion...</p>`;
+  try {
+    const active = await getActiveChargeForUser(user.nom);
+    if (active) {
+      state.chargeRecordId = active.id;
+      state.chargeStartTime = active.dateDebut;
+      state.selectedPoint = active.point;
+      state.screen = "charging";
+    } else {
+      state.screen = "home";
+    }
+  } catch (e) {
+    console.error("Erreur vérification charge active:", e);
+    state.screen = "home";
+  }
   render();
 }
 
@@ -649,13 +673,13 @@ function renderHome() {
         <label class="field-label" style="margin-bottom:8px;text-align:center">Quel côté de la borne ?</label>
         <div class="point-row">
           <button class="point-btn ${state.selectedPoint === "Point 1" ? "point-active" : ""} ${busy1 ? "point-busy" : ""}"
-                  ${busy1 ? "disabled" : `onclick="pickPoint('Point 1')"`}>
+                  data-point="Point 1" ${busy1 ? "disabled" : `onclick="pickPoint('Point 1')"`}>
             <div class="point-number">1</div>
             <div class="point-label">${busy1 ? "Occupé" : "Gauche"}</div>
             ${busy1 ? `<div class="point-busy-user">🔒 ${busy1.utilisateur}</div>` : ""}
           </button>
           <button class="point-btn ${state.selectedPoint === "Point 2" ? "point-active" : ""} ${busy2 ? "point-busy" : ""}"
-                  ${busy2 ? "disabled" : `onclick="pickPoint('Point 2')"`}>
+                  data-point="Point 2" ${busy2 ? "disabled" : `onclick="pickPoint('Point 2')"`}>
             <div class="point-number">2</div>
             <div class="point-label">${busy2 ? "Occupé" : "Droite"}</div>
             ${busy2 ? `<div class="point-busy-user">🔒 ${busy2.utilisateur}</div>` : ""}
@@ -710,10 +734,8 @@ async function loadBusyPoints() {
 
 function pickPoint(p) {
   state.selectedPoint = p;
-  // Re-render les boutons
   document.querySelectorAll(".point-btn").forEach(b => {
-    const isActive = b.getAttribute("onclick").includes(p);
-    b.classList.toggle("point-active", isActive);
+    b.classList.toggle("point-active", b.dataset.point === p);
   });
   const btn = el("btnStartCharge");
   if (btn) { btn.style.opacity = "1"; btn.style.pointerEvents = "auto"; }
@@ -831,6 +853,9 @@ function renderEnd() {
     ? `Dernier relevé ${state.selectedPoint} : <strong>${state.previousCompteur.toFixed(1)} kWh</strong>`
     : "Aucun relevé précédent trouvé";
 
+  const compteurValid = state.compteurKwh && parseFloat(state.compteurKwh) > 0 &&
+    (state.previousCompteur === null || parseFloat(state.compteurKwh) > state.previousCompteur);
+
   el("screenEnd").innerHTML = `
     <div style="background:var(--color-bg-2);border-radius:var(--radius-md);padding:1rem;margin-bottom:1.25rem">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
@@ -838,28 +863,52 @@ function renderEnd() {
         <span style="font-size:13px;font-weight:500">${fmtDuration(state.endDureeMin)}</span>
       </div>
       <div style="font-size:13px;color:var(--color-text-secondary);margin-bottom:3px">Début : ${fmtTime(t)} → Fin : ${fmtTime(new Date())}</div>
-      <div style="font-size:13px;color:var(--color-text-secondary)">${state.currentUser.nom} · Coût estimé : ${fmtCost(state.endCostEstime)}</div>
+      <div style="font-size:13px;color:var(--color-text-secondary)">${state.currentUser.nom}</div>
     </div>
 
     <div class="mb-4">
-      <label class="field-label">Relevé du compteur ${state.selectedPoint} (kWh)</label>
+      <label class="field-label">Relevé du compteur ${state.selectedPoint} (kWh) <span style="color:var(--red)">*</span></label>
       <input type="number" inputmode="decimal" step="0.1" id="compteurInput"
              placeholder="Ex : 1234.5" value="${state.compteurKwh}"
-             oninput="state.compteurKwh=this.value"
-             style="font-family:var(--font-mono);font-size:18px;text-align:center">
+             oninput="onCompteurInput(this.value)"
+             style="font-family:var(--font-mono);font-size:18px;text-align:center;${!compteurValid && state.compteurKwh ? 'border-color:var(--red)' : ''}">
       <div style="font-size:11px;color:var(--color-text-tertiary);margin-top:4px;line-height:1.5">
         ${prevLabel}<br>
-        Indiquez le nombre affiché sur le compteur de la borne pour calculer votre consommation réelle.
+        Relevé obligatoire — indiquez le nombre affiché sur le compteur de la borne.
+      </div>
+      <div id="compteurError" style="font-size:12px;color:var(--red);margin-top:4px;${compteurValid || !state.compteurKwh ? 'display:none' : ''}">
+        ${state.compteurKwh && state.previousCompteur !== null && parseFloat(state.compteurKwh) <= state.previousCompteur ? "La valeur doit être supérieure au dernier relevé (" + state.previousCompteur.toFixed(1) + " kWh)" : ""}
       </div>
     </div>
 
     <div class="btn-row">
       <button class="btn-back" onclick="cancelEnd()">Reprendre</button>
-      <button class="btn-login" style="flex:2" id="btnConfirmEnd" onclick="confirmEnd()">
+      <button class="btn-login" style="flex:2" id="btnConfirmEnd" onclick="confirmEnd()" ${!compteurValid ? "disabled" : ""}>
         Confirmer la fin
       </button>
     </div>
   `;
+}
+
+function onCompteurInput(val) {
+  state.compteurKwh = val;
+  const compteur = parseFloat(val);
+  const valid = val && compteur > 0 && (state.previousCompteur === null || compteur > state.previousCompteur);
+  const btn = el("btnConfirmEnd");
+  if (btn) btn.disabled = !valid;
+
+  const errEl = el("compteurError");
+  if (errEl) {
+    if (val && state.previousCompteur !== null && compteur <= state.previousCompteur) {
+      errEl.textContent = "La valeur doit être supérieure au dernier relevé (" + state.previousCompteur.toFixed(1) + " kWh)";
+      errEl.style.display = "";
+    } else {
+      errEl.style.display = "none";
+    }
+  }
+
+  const input = el("compteurInput");
+  if (input) input.style.borderColor = (!valid && val) ? "var(--red)" : "";
 }
 
 function cancelEnd() {
@@ -868,10 +917,12 @@ function cancelEnd() {
 }
 
 async function confirmEnd() {
+  const compteur = state.compteurKwh ? parseFloat(state.compteurKwh) : null;
+  if (compteur === null || compteur <= 0) return;
+  if (state.previousCompteur !== null && compteur <= state.previousCompteur) return;
+
   const btn = el("btnConfirmEnd");
   if (btn) { btn.disabled = true; btn.textContent = "Enregistrement..."; }
-
-  const compteur = state.compteurKwh ? parseFloat(state.compteurKwh) : null;
 
   // Calcul conso réelle
   let consoReelle = null;
@@ -911,25 +962,18 @@ async function confirmEnd() {
 function renderSummary() {
   const s = state.summary;
 
-  // Bloc consommation réelle
-  let reelHtml = "";
-  if (s.consoReelle !== null && s.coutReel !== null) {
-    reelHtml = `
-      <div style="background:var(--green-bg);border:1.5px solid var(--green);border-radius:var(--radius-lg);padding:1rem;margin-bottom:1.25rem;text-align:center">
-        <div style="font-size:11px;color:var(--green-dark);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Consommation réelle</div>
-        <div style="font-size:28px;font-weight:700;color:var(--green-dark);font-family:var(--font-mono)">${s.consoReelle.toFixed(1)} kWh</div>
-        <div style="font-size:22px;font-weight:600;color:var(--green-dark);font-family:var(--font-mono);margin-top:4px">${fmtCost(s.coutReel)}</div>
-        <div style="font-size:11px;color:var(--green-dark);opacity:0.7;margin-top:2px">${s.previousCompteur.toFixed(1)} → ${s.compteurKwh.toFixed(1)} kWh · ${COST_PER_KWH.toFixed(2)} €/kWh</div>
-      </div>`;
-  }
-
   el("screenSummary").innerHTML = `
     <div class="summary-screen">
       <div class="summary-icon">✓</div>
       <div class="summary-title">Recharge terminée !</div>
       <div class="summary-sub">Session enregistrée — ${s.point}</div>
 
-      ${reelHtml}
+      <div style="background:var(--green-bg);border:1.5px solid var(--green);border-radius:var(--radius-lg);padding:1.25rem;margin-bottom:1.25rem;text-align:center">
+        <div style="font-size:11px;color:var(--green-dark);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Consommation réelle</div>
+        <div style="font-size:32px;font-weight:700;color:var(--green-dark);font-family:var(--font-mono)">${s.consoReelle !== null ? s.consoReelle.toFixed(1) + " kWh" : "—"}</div>
+        <div style="font-size:26px;font-weight:600;color:var(--green-dark);font-family:var(--font-mono);margin-top:6px">${s.coutReel !== null ? fmtCost(s.coutReel) : "—"}</div>
+        ${s.previousCompteur !== null && s.compteurKwh !== null ? `<div style="font-size:11px;color:var(--green-dark);opacity:0.7;margin-top:4px">${s.previousCompteur.toFixed(1)} → ${s.compteurKwh.toFixed(1)} kWh · ${COST_PER_KWH.toFixed(2)} €/kWh</div>` : ""}
+      </div>
 
       <div class="summary-card">
         <div class="summary-row">
@@ -953,27 +997,9 @@ function renderSummary() {
           <span class="summary-row-value">${fmtDuration(s.dureeMin)}</span>
         </div>
         <div class="summary-row">
-          <span class="summary-row-label">Énergie estimée</span>
-          <span class="summary-row-value">${(s.dureeMin / 60 * 11).toFixed(1)} kWh</span>
-        </div>
-        ${s.compteurKwh ? `
-        <div class="summary-row">
           <span class="summary-row-label">Compteur borne</span>
           <span class="summary-row-value" style="font-family:var(--font-mono)">${s.compteurKwh.toFixed(1)} kWh</span>
-        </div>` : ""}
-        <div class="summary-row">
-          <span class="summary-row-label">Coût estimé (temps)</span>
-          <span class="summary-row-value">${fmtCost(s.cost)}</span>
         </div>
-        ${s.coutReel !== null ? `
-        <div class="summary-row">
-          <span class="summary-row-label">Coût réel (compteur)</span>
-          <span class="summary-row-value summary-total">${fmtCost(s.coutReel)}</span>
-        </div>` : `
-        <div class="summary-row">
-          <span class="summary-row-label">Coût estimé</span>
-          <span class="summary-row-value summary-total">${fmtCost(s.cost)}</span>
-        </div>`}
       </div>
 
       <button class="btn-home" onclick="goHome()">Retour à l'accueil</button>
