@@ -371,7 +371,7 @@ async function createCharge(userName, point) {
 }
 
 async function getLastCompteur(point) {
-  const formula = encodeURIComponent(`AND({PointDeCharge}="${point}",{CompteurKwh}!="")`);
+  const formula = encodeURIComponent(`AND({PointDeCharge}="${point}",{CompteurKwh}>0)`);
   const d = await api(`${TBL_CHARGES}?filterByFormula=${formula}&sort[0][field]=DateDebut&sort[0][direction]=desc&maxRecords=1&fields[]=CompteurKwh`);
   if (!d.records.length) return null;
   return d.records[0].fields["CompteurKwh"] || null;
@@ -972,7 +972,7 @@ function renderSummary() {
         <div style="font-size:11px;color:var(--green-dark);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Consommation réelle</div>
         <div style="font-size:32px;font-weight:700;color:var(--green-dark);font-family:var(--font-mono)">${s.consoReelle !== null ? s.consoReelle.toFixed(1) + " kWh" : "—"}</div>
         <div style="font-size:26px;font-weight:600;color:var(--green-dark);font-family:var(--font-mono);margin-top:6px">${s.coutReel !== null ? fmtCost(s.coutReel) : "—"}</div>
-        ${s.previousCompteur !== null && s.compteurKwh !== null ? `<div style="font-size:11px;color:var(--green-dark);opacity:0.7;margin-top:4px">${s.previousCompteur.toFixed(1)} → ${s.compteurKwh.toFixed(1)} kWh · ${COST_PER_KWH.toFixed(2)} €/kWh</div>` : ""}
+        ${s.previousCompteur !== null && s.compteurKwh !== null ? `<div style="font-size:11px;color:var(--green-dark);opacity:0.7;margin-top:4px">${s.previousCompteur.toFixed(1)} → ${s.compteurKwh.toFixed(1)} kWh</div>` : ""}
       </div>
 
       <div class="summary-card">
@@ -999,6 +999,10 @@ function renderSummary() {
         <div class="summary-row">
           <span class="summary-row-label">Compteur borne</span>
           <span class="summary-row-value" style="font-family:var(--font-mono)">${s.compteurKwh.toFixed(1)} kWh</span>
+        </div>
+        <div class="summary-row">
+          <span class="summary-row-label">Prix du kWh</span>
+          <span class="summary-row-value">${COST_PER_KWH.toFixed(2).replace(".",",")} €</span>
         </div>
       </div>
 
