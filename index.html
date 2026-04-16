@@ -389,6 +389,9 @@ async function closeCharge(recordId, dureeMinutes, coutEstime, compteurKwh, cons
   if (consoReelle !== null && consoReelle !== undefined) {
     fields["ConsoReelle"] = consoReelle;
   }
+  if (coutReel !== null && coutReel !== undefined) {
+    fields["CoutReel"] = coutReel;
+  }
   return api(`${TBL_CHARGES}/${recordId}`, {
     method: "PATCH",
     body: JSON.stringify({ fields })
